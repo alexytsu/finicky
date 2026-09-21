@@ -71,13 +71,20 @@ func (cfw *ConfigFileWatcher) GetConfigPaths() []string {
 	if cfw.customConfigPath != "" {
 		configPaths = append(configPaths, cfw.customConfigPath)
 	} else {
+		// XDG Base Directory spec: use $XDG_CONFIG_HOME when set,
+		// falling back to ~/.config
+		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+		if xdgConfigHome == "" {
+			xdgConfigHome = filepath.Join(homeDir, ".config")
+		}
+
 		configPaths = append(configPaths,
 			"~/.finicky.js",
 			"~/.finicky.ts",
-			"~/.config/finicky.js",
-			"~/.config/finicky.ts",
-			"~/.config/finicky/finicky.js",
-			"~/.config/finicky/finicky.ts",
+			filepath.Join(xdgConfigHome, "finicky.js"),
+			filepath.Join(xdgConfigHome, "finicky.ts"),
+			filepath.Join(xdgConfigHome, "finicky", "finicky.js"),
+			filepath.Join(xdgConfigHome, "finicky", "finicky.ts"),
 		)
 	}
 
