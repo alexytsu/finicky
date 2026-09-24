@@ -257,30 +257,36 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 			// Folders may not exist yet (e.g. $XDG_CONFIG_HOME/finicky), so
 			// watch the nearest existing ancestor of each and refresh watches
 			// as intermediate directories get created. fsnotify watches are
-			// not recursive.
-			watchedFolders := make(map[string]bool)
+			// not recursive. The watcher's live watch list is the source of
+			// truth: fsnotify drops a watch itself when a directory is
+			// deleted, so a directory that is removed and recreated gets
+			// watched again here.
 			addWatches := func() {
+				watched := make(map[string]bool)
+				for _, path := range cfw.watcher.WatchList() {
+					watched[path] = true
+				}
 				for folder := range uniqueFolders {
 					ancestor := nearestExistingDir(folder)
-					if ancestor == "" || watchedFolders[ancestor] {
+					if ancestor == "" || watched[ancestor] {
 						continue
 					}
 					if err := cfw.watcher.Add(ancestor); err != nil {
 						slog.Debug("Error watching folder", "folder", ancestor, "error", err)
-					} else {
-						watchedFolders[ancestor] = true
 					}
 				}
 			}
 			addWatches()
 
-			// Convert to slice for logging
-			var watchPaths []string
-			for folder := range watchedFolders {
-				watchPaths = append(watchPaths, folder)
+			removeAllWatches := func() {
+				for _, path := range cfw.watcher.WatchList() {
+					if err := cfw.watcher.Remove(path); err != nil {
+						slog.Debug("Error removing watch on folder", "folder", path, "error", err)
+					}
+				}
 			}
 
-			slog.Debug("Watching for config files", "paths", watchPaths)
+			slog.Debug("Watching for config files", "paths", cfw.watcher.WatchList())
 
 			detectedCreation := false
 			for !detectedCreation {
@@ -301,13 +307,22 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 							}
 						}
 
-						if !isConfigFile {
-							// A directory on the way to a config folder may
-							// have been created; start watching it so a config
-							// file created inside it is detected.
-							if event.Has(fsnotify.Create) && isAncestorOfAny(eventName, uniqueFolders) {
-								addWatches()
+						if !isConfigFile && event.Has(fsnotify.Create) && isAncestorOfAny(eventName, uniqueFolders) {
+							// A directory on the way to a config folder was
+							// created; start watching it so a config file
+							// created inside it is detected.
+							addWatches()
+
+							// The directory may have been moved into place
+							// with a config file already inside it, in which
+							// case no separate file event will follow.
+							if foundPath, err := cfw.GetConfigPath(false); err == nil {
+								event = fsnotify.Event{Name: foundPath, Op: fsnotify.Create}
+								isConfigFile = true
 							}
+						}
+
+						if !isConfigFile {
 							break
 						}
 
@@ -318,11 +333,7 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 							return err
 						}
 
-						for folder := range watchedFolders {
-							if err := cfw.watcher.Remove(folder); err != nil {
-								slog.Debug("Error removing watch on folder", "folder", folder, "error", err)
-							}
-						}
+						removeAllWatches()
 					}
 
 				case err, ok := <-cfw.watcher.Errors:
