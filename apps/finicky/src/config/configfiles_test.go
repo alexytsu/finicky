@@ -52,6 +52,42 @@ func TestGetConfigPathsHonorsXDGConfigHome(t *testing.T) {
 	}
 }
 
+func TestNearestExistingDir(t *testing.T) {
+	base := t.TempDir()
+
+	if got := nearestExistingDir(base); got != base {
+		t.Errorf("nearestExistingDir(%q) = %q, want the dir itself", base, got)
+	}
+
+	missing := filepath.Join(base, "finicky", "nested")
+	if got := nearestExistingDir(missing); got != base {
+		t.Errorf("nearestExistingDir(%q) = %q, want nearest ancestor %q", missing, got, base)
+	}
+}
+
+func TestIsAncestorOfAny(t *testing.T) {
+	folders := map[string]bool{
+		"/home/user/.config/finicky": true,
+	}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/home/user/.config/finicky", true},
+		{"/home/user/.config", true},
+		{"/home/user", true},
+		{"/home/user/.config/finick", false},
+		{"/home/other", false},
+	}
+
+	for _, c := range cases {
+		if got := isAncestorOfAny(c.path, folders); got != c.want {
+			t.Errorf("isAncestorOfAny(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+}
+
 func TestGetConfigPathsCustomPathWins(t *testing.T) {
 	cfw := &ConfigFileWatcher{customConfigPath: "/tmp/custom-finicky.js"}
 	paths := cfw.GetConfigPaths()

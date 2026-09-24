@@ -250,25 +250,37 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 			// Use a map to track unique folders
 			uniqueFolders := make(map[string]bool)
 			for _, path := range configPaths {
-				expandedPath := os.ExpandEnv(path)
-				folder := filepath.Dir(expandedPath)
+				folder := filepath.Dir(path)
 				uniqueFolders[folder] = true
 			}
 
+			// Folders may not exist yet (e.g. $XDG_CONFIG_HOME/finicky), so
+			// watch the nearest existing ancestor of each and refresh watches
+			// as intermediate directories get created. fsnotify watches are
+			// not recursive.
+			watchedFolders := make(map[string]bool)
+			addWatches := func() {
+				for folder := range uniqueFolders {
+					ancestor := nearestExistingDir(folder)
+					if ancestor == "" || watchedFolders[ancestor] {
+						continue
+					}
+					if err := cfw.watcher.Add(ancestor); err != nil {
+						slog.Debug("Error watching folder", "folder", ancestor, "error", err)
+					} else {
+						watchedFolders[ancestor] = true
+					}
+				}
+			}
+			addWatches()
+
 			// Convert to slice for logging
 			var watchPaths []string
-			for folder := range uniqueFolders {
+			for folder := range watchedFolders {
 				watchPaths = append(watchPaths, folder)
 			}
 
 			slog.Debug("Watching for config files", "paths", watchPaths)
-
-			// Add each unique folder to the watcher
-			for folder := range uniqueFolders {
-				if err := cfw.watcher.Add(folder); err != nil {
-					slog.Debug("Error watching folder", "folder", folder, "error", err)
-				}
-			}
 
 			detectedCreation := false
 			for !detectedCreation {
@@ -283,14 +295,19 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 						eventName := event.Name
 						isConfigFile := false
 						for _, path := range configPaths {
-							expandedPath := os.ExpandEnv(path)
-							if eventName == expandedPath {
+							if eventName == path {
 								isConfigFile = true
 								break
 							}
 						}
 
 						if !isConfigFile {
+							// A directory on the way to a config folder may
+							// have been created; start watching it so a config
+							// file created inside it is detected.
+							if event.Has(fsnotify.Create) && isAncestorOfAny(eventName, uniqueFolders) {
+								addWatches()
+							}
 							break
 						}
 
@@ -301,7 +318,7 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 							return err
 						}
 
-						for folder := range uniqueFolders {
+						for folder := range watchedFolders {
 							if err := cfw.watcher.Remove(folder); err != nil {
 								slog.Debug("Error removing watch on folder", "folder", folder, "error", err)
 							}
@@ -386,6 +403,32 @@ func (cfw *ConfigFileWatcher) handleConfigFileEvent(event fsnotify.Event) error 
 	})
 	cfw.debounceMu.Unlock()
 	return nil
+}
+
+// nearestExistingDir walks up from path until it finds a directory that
+// exists, returning "" if none does
+func nearestExistingDir(path string) string {
+	for {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return path
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		path = parent
+	}
+}
+
+// isAncestorOfAny reports whether path equals, or is an ancestor of, any of
+// the given folders
+func isAncestorOfAny(path string, folders map[string]bool) bool {
+	for folder := range folders {
+		if folder == path || strings.HasPrefix(folder, path+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveSymlink resolves a symlink to its target file path
