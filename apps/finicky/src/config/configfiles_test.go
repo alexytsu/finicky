@@ -52,6 +52,22 @@ func TestGetConfigPathsHonorsXDGConfigHome(t *testing.T) {
 	}
 }
 
+func TestGetConfigPathsIgnoresRelativeXDGConfigHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "relative/config")
+
+	cfw := &ConfigFileWatcher{}
+	paths := cfw.GetConfigPaths()
+
+	for _, p := range paths {
+		if strings.Contains(p, "relative") {
+			t.Errorf("relative XDG_CONFIG_HOME should be ignored, got %q", p)
+		}
+	}
+	if !strings.HasSuffix(paths[2], filepath.Join(".config", "finicky.js")) {
+		t.Errorf("expected fallback to ~/.config, got %q", paths[2])
+	}
+}
+
 func TestNearestExistingDir(t *testing.T) {
 	base := t.TempDir()
 

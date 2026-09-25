@@ -71,10 +71,10 @@ func (cfw *ConfigFileWatcher) GetConfigPaths() []string {
 	if cfw.customConfigPath != "" {
 		configPaths = append(configPaths, cfw.customConfigPath)
 	} else {
-		// XDG Base Directory spec: use $XDG_CONFIG_HOME when set,
-		// falling back to ~/.config
+		// XDG Base Directory spec: use $XDG_CONFIG_HOME when set to an
+		// absolute path, falling back to ~/.config (relative values are ignored)
 		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
+		if xdgConfigHome == "" || !filepath.IsAbs(xdgConfigHome) {
 			xdgConfigHome = filepath.Join(homeDir, ".config")
 		}
 
