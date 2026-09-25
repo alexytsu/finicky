@@ -1,9 +1,13 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 func TestGetConfigPathsDefaultsToDotConfig(t *testing.T) {
@@ -111,4 +115,48 @@ func TestGetConfigPathsCustomPathWins(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "/tmp/custom-finicky.js" {
 		t.Errorf("expected only the custom path, got %v", paths)
 	}
+}
+
+func TestWatcherPicksUpConfigCreatedInMissingDirs(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "a", "b", "finicky.js")
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify := make(chan struct{}, 1)
+	cfw := &ConfigFileWatcher{
+		watcher:            watcher,
+		customConfigPath:   configPath,
+		configChangeNotify: notify,
+		cache:              &ConfigCache{cachePath: filepath.Join(root, "cache.json")},
+	}
+	defer cfw.TearDown()
+	go cfw.StartWatching()
+
+	waitForNotify := func(what string) {
+		t.Helper()
+		select {
+		case <-notify:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for notification after %s", what)
+		}
+	}
+
+	// Give the watcher time to watch the nearest existing ancestor (root)
+	time.Sleep(100 * time.Millisecond)
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("export default {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	waitForNotify("creating config in missing directories")
+
+	if err := os.WriteFile(configPath, []byte("export default { defaultBrowser: \"Safari\" }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	waitForNotify("editing config")
 }
