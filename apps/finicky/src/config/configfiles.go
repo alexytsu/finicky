@@ -296,6 +296,13 @@ func (cfw *ConfigFileWatcher) StartWatching() error {
 						return fmt.Errorf("watcher closed")
 					}
 
+					// A removed or renamed directory loses its fsnotify watch,
+					// and its ancestors may not be watched; fall back to the
+					// nearest existing ancestor so a recreation is detected.
+					if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+						addWatches()
+					}
+
 					if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
 						// Check if the event path matches any of our config paths
 						eventName := event.Name
